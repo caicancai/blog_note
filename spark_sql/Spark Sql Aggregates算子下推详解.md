@@ -44,13 +44,38 @@ Aggregate [count(DEPT#0) AS count(DEPT)#6L]
   }
 ```
 
-上图明显是有agg算子对应的数据结构的
+上图明显是有agg算子对应的数据结构的，所以会继续走下面重写aggregate数据结构的具体流程
 
 ```shell
 Aggregate [count(DEPT#0) AS count(DEPT)#6L]
 ```
 
 ### **2.**将对应的数据结构进行拆分，用于后续下推规则的判断
+
+下面我们详细刨析一下这些数据是什么
+
+① aliasMap ：从project提取别名及其投影存储到map中，例如：
+
+```shell
+'SELECT a + b AS c, d ...' produces Map(c -> Alias(a + b, c))
+```
+
+② actualResultExprs和actualGroupExprs：分别保存aggregate和group by表达式对应的数据数据结构
+
+③ aggregates：这里主要是对actualResultExprs中重复的表达式去重，防止下推重复的表达式
+
+```shell
+`SELECT max(a) + 1, max(a) + 2 FROM ...`, we should only push down one
+`max(a)` to the data source.
+```
+
+⑤ normalizedAggExprs和normalizedGroupingExpr：更改属性名进行匹配
+
+⑥translatedAggOpt：懂都懂，所以上面的这些都是为了生成这个东西
+
+如果最后translatedAggOpt数据为空，则表示没有需要下推的agg算子
+
+**整体代码如下：**
 
 ```scala
       val aliasMap = getAliasMap(project)
@@ -143,7 +168,9 @@ Aggregate [count(DEPT#0) AS count(DEPT)#6L]
 
 ### 4. 下推Agg算子——重写数据结构
 
-到这一步，就会根据对应的下推规则去重写对应的数据结构、
+到这一步，就会根据对应的下推规则去重写对应的数据结构
+
+注：这里的重写能完整下推和不能下推的规则是不一样的
 
 ```scala
 holder.pushedAggregate = Some(translatedAgg)
@@ -237,3 +264,6 @@ Project [COUNT(DEPT)#11L AS count(DEPT#0)#5L AS count(DEPT)#6L]
 +- RelationV2[COUNT(DEPT)#11L] test.employee
 ```
 
+### 总结一下
+
+其实logical plan其实相当于把logical plan这个数据结构进行按规则重写了
